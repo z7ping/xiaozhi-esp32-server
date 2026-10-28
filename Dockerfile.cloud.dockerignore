@@ -1,0 +1,22 @@
+# Dedicated context filter; intentionally does not change upstream Dockerfile builds.
+.git
+.gitignore
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/.mypy_cache/
+**/.venv/
+**/node_modules/
+**/target/
+**/dist/
+**/*.log
+.env
+.env.*
+main/xiaozhi-server/data/
+main/xiaozhi-server/tmp/
+main/xiaozhi-server/tests/
+main/xiaozhi-server/models/SenseVoiceSmall/
+# Keep models/snakers4_silero-vad/src/silero_vad/data/silero_vad.onnx
+main/xiaozhi-server/models/snakers4_silero-vad/src/silero_vad/data/*.jit
+main/xiaozhi-server/models/snakers4_silero-vad/src/silero_vad/data/silero_vad_half.onnx
+main/xiaozhi-server/models/snakers4_silero-vad/src/silero_vad/data/silero_vad_16k_op15.onnx

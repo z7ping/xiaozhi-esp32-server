@@ -1,0 +1,42 @@
+# Main-branch-compatible cloud-only example.
+# Copy to main/xiaozhi-server/data/.config.yaml and insert real API keys.
+# MiMo users: after PR #1 merges, use config.cloud.mimo.example.yaml instead.
+server:
+  ip: 0.0.0.0
+  port: 8000
+  http_port: 8003
+  websocket: ws://YOUR_LAN_IP:8000/xiaozhi/v1/
+  vision_explain: http://YOUR_LAN_IP:8003/mcp/vision/explain
+
+selected_module:
+  VAD: SileroVAD
+  ASR: OpenaiASR
+  LLM: AliLLM
+  TTS: OpenAITTS
+  Memory: nomem
+  Intent: function_call
+
+ASR:
+  OpenaiASR:
+    type: openai
+    api_key: YOUR_OPENAI_KEY
+    base_url: https://api.openai.com/v1/audio/transcriptions
+    model_name: gpt-4o-mini-transcribe
+    output_dir: tmp/
+
+LLM:
+  AliLLM:
+    type: openai
+    api_key: YOUR_LLM_KEY
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    model_name: qwen-flash
+    max_tokens: 1024
+
+TTS:
+  OpenAITTS:
+    type: openai
+    api_key: YOUR_OPENAI_KEY
+    api_url: https://api.openai.com/v1/audio/speech
+    model: tts-1
+    voice: alloy
+    output_dir: tmp/

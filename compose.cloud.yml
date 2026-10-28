@@ -1,0 +1,84 @@
+# Python cloud-only service by default. Optional management console: --profile manager
+name: xiaozhi-cloud
+
+services:
+  xiaozhi-server:
+    image: xiaozhi-python-cloud:dev
+    build:
+      context: .
+      dockerfile: Dockerfile.cloud
+    restart: unless-stopped
+    ports:
+      - "${XIAOZHI_WS_PORT:-8000}:8000"
+      - "${XIAOZHI_HTTP_PORT:-8003}:8003"
+    environment:
+      TZ: Asia/Shanghai
+      # Required to play resource links: hostname in Jellyfin MCP --audio-public-url.
+      MCP_MEDIA_ALLOWED_HOSTS: "${MCP_MEDIA_ALLOWED_HOSTS:-}"
+    volumes:
+      # Copy config.cloud.example.yaml to data/.config.yaml before startup.
+      - ./main/xiaozhi-server/data:/opt/xiaozhi-esp32-server/data
+      - xiaozhi-tmp:/opt/xiaozhi-esp32-server/tmp
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('127.0.0.1',8000),2); s.close()"]
+      interval: 20s
+      timeout: 5s
+      start_period: 40s
+      retries: 3
+
+  # Optional admin console: build it once, not during each Python development loop.
+  # Enable: docker compose -f compose.cloud.yml --profile manager up -d --build
+  manager:
+    profiles: ["manager"]
+    image: xiaozhi-manager-local:dev
+    build:
+      context: .
+      dockerfile: Dockerfile-web
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${XIAOZHI_MANAGER_PORT:-8002}:8002"
+    environment:
+      TZ: Asia/Shanghai
+      SPRING_DATASOURCE_DRUID_URL: "jdbc:mysql://mysql:3306/xiaozhi_esp32_server?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&nullCatalogMeansCurrent=true&connectTimeout=30000&socketTimeout=30000&autoReconnect=true&failOverReadOnly=false&maxReconnects=10"
+      SPRING_DATASOURCE_DRUID_USERNAME: root
+      SPRING_DATASOURCE_DRUID_PASSWORD: "${MYSQL_ROOT_PASSWORD:-change-me-before-use}"
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_DATA_REDIS_PASSWORD: ""
+    volumes:
+      - ./main/xiaozhi-server/uploadfile:/uploadfile
+
+  mysql:
+    profiles: ["manager"]
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:-change-me-before-use}"
+      MYSQL_DATABASE: xiaozhi_esp32_server
+    volumes:
+      - xiaozhi-mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    profiles: ["manager"]
+    image: redis:8.0
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  xiaozhi-tmp:
+  xiaozhi-mysql:
