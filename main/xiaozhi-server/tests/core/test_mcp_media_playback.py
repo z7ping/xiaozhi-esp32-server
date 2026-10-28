@@ -132,11 +132,6 @@ def test_media_player_pause_resume_preserves_playlist_without_just_clearing_repo
         async def idle(self):
             await asyncio.Event().wait()
 
-        with patch.object(MCPMediaPlayer, "_run", idle), patch(
-            "core.media.mcp_media_player.send_tts_message", return_value=None
-        ):
-            # send_tts_message is an async function; patch via AsyncMock below.
-            pass
         from unittest.mock import AsyncMock
         with patch.object(MCPMediaPlayer, "_run", idle), patch(
             "core.media.mcp_media_player.send_tts_message", new_callable=AsyncMock
