@@ -6,7 +6,6 @@ logged or placed into the LLM dialogue. Each ConnectionHandler has one player.
 """
 
 import asyncio
-import ipaddress
 import os
 import shutil
 from dataclasses import dataclass
@@ -102,6 +101,7 @@ class MCPMediaPlayer:
     async def _run(self):
         try:
             await send_tts_message(self.conn, "start")
+            self.conn.client_is_speaking = True
             while self.active and self.index < len(self.tracks) and not self.conn.stop_event.is_set():
                 track = self.tracks[self.index]
                 await send_display_message(self.conn, f"正在播放：{track.title}")
@@ -121,7 +121,7 @@ class MCPMediaPlayer:
                 self._process.kill()
                 await self._process.wait()
             self._process = None
-            if self.active and self.owns_audio:
+            if asyncio.current_task() is self._task and self.active and self.owns_audio:
                 self.active = False
                 self.owns_audio = False
                 if not self.conn.client_abort and not self.conn.stop_event.is_set():
@@ -209,6 +209,7 @@ class MCPMediaPlayer:
                 self._take_audio()
                 self._gate.set()
                 await send_tts_message(self.conn, "start")
+                self.conn.client_is_speaking = True
                 return "已继续播放"
             if action in ("next", "previous"):
                 next_index = self.index + (1 if action == "next" else -1)
