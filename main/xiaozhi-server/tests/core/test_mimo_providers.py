@@ -115,9 +115,13 @@ def test_mimo_llm_maps_max_tokens_for_regular_and_tool_calls():
 
     calls = []
 
+    class FakeStream(list):
+        def close(self):
+            pass
+
     def create(**kwargs):
         calls.append(kwargs)
-        return []
+        return FakeStream()
 
     provider = object.__new__(LLMProvider)
     provider.model_name = "mimo-v2.6-flash"
