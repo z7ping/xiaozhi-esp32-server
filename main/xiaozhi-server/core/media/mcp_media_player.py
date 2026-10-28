@@ -125,12 +125,16 @@ class MCPMediaPlayer:
                     self.index += 1
                 controller = getattr(self.conn, "audio_rate_controller", None)
                 if controller:
-                    await controller.queue_empty_event.wait()
+                    # Only a few frames are queued at any time. Do not hang
+                    # forever if the sender task died unexpectedly.
+                    await asyncio.wait_for(controller.queue_empty_event.wait(), timeout=30)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             # Do not surface FFmpeg's URL-bearing stderr or opaque token.
             self.conn.logger.warning(f"MCP media playback stopped ({type(exc).__name__})")
+            if self.owns_audio and not self.conn.client_abort:
+                await send_display_message(self.conn, "音乐播放失败，请重试")
         finally:
             if self._process and self._process.returncode is None:
                 try:
@@ -139,10 +143,11 @@ class MCPMediaPlayer:
                     pass
                 await self._process.wait()
             self._process = None
-            if asyncio.current_task() is self._task and self.active and self.owns_audio:
+            if asyncio.current_task() is self._task and self.active:
+                was_owner = self.owns_audio
                 self.active = False
                 self.owns_audio = False
-                if not self.conn.client_abort and not self.conn.stop_event.is_set():
+                if was_owner and not self.conn.client_abort and not self.conn.stop_event.is_set():
                     await send_tts_message(self.conn, "stop")
 
     async def _play_track(self, track):
