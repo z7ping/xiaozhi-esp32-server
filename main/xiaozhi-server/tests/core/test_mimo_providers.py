@@ -108,3 +108,35 @@ def test_mimo_tts_voice_clone_encodes_local_reference(tmp_path):
     request = provider._request_data("早上好")
     assert request["audio"]["voice"].startswith("data:audio/wav;base64,")
     assert _reference_voice(request["audio"]["voice"]) == request["audio"]["voice"]
+
+
+def test_mimo_llm_maps_max_tokens_for_regular_and_tool_calls():
+    from core.providers.llm.openai.openai import LLMProvider
+
+    calls = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        return []
+
+    provider = object.__new__(LLMProvider)
+    provider.model_name = "mimo-v2.6-flash"
+    provider.base_url = "https://api.xiaomimimo.com/v1"
+    provider.thinking_mode = "disabled"
+    provider.max_tokens = 300
+    provider.temperature = None
+    provider.top_p = None
+    provider.frequency_penalty = None
+    provider.client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+
+    assert list(provider.response("s", [{"role": "user", "content": "hi"}])) == []
+    assert list(provider.response_with_functions(
+        "s", [{"role": "user", "content": "hi"}], functions=[]
+    )) == []
+    assert len(calls) == 2
+    for request in calls:
+        assert request["max_completion_tokens"] == 300
+        assert "max_tokens" not in request
+        assert request["extra_body"]["thinking"] == {"type": "disabled"}
