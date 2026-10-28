@@ -22,6 +22,9 @@ async def sendAudioMessage(conn: "ConnectionHandler", sentenceType, audios, text
     # 跳过旧句子残留音频
     if sentence_id is not None and sentence_id != conn.sentence_id:
         return
+    # Media playback owns this turn's speaker; block late TTS start/stop packets.
+    if sentence_id is not None and sentence_id == getattr(conn, "mcp_media_suppressed_sentence", None):
+        return
 
     if conn.tts.tts_audio_first_sentence:
         conn.logger.bind(tag=TAG).info(f"发送第一段语音: {text}")
