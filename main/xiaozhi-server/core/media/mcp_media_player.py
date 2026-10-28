@@ -99,6 +99,8 @@ class MCPMediaPlayer:
         self.conn.client_abort = False
         self.owns_audio = True
         self.sentence_id = self.conn.sentence_id
+        # Silence any in-flight TTS frames from the tool-invoking turn.
+        self.conn.mcp_media_suppressed_sentence = self.sentence_id
 
     async def _cancel_current(self):
         task = self._task
