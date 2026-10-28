@@ -372,7 +372,8 @@ class TTSProviderBase(ABC):
             try:
                 message = self.tts_text_queue.get(timeout=1)
                 media_player = getattr(self.conn, "mcp_media_player", None)
-                if (message.sentence_id == getattr(self.conn, "mcp_media_suppressed_sentence", None)
+                suppressed_id = getattr(self.conn, "mcp_media_suppressed_sentence", None)
+                if ((suppressed_id is not None and message.sentence_id == suppressed_id)
                         or (media_player and media_player.owns_audio)):
                     continue
                 if self.conn.client_abort:
@@ -434,7 +435,8 @@ class TTSProviderBase(ABC):
                     continue
 
                 media_player = getattr(self.conn, "mcp_media_player", None)
-                if (sentence_id == getattr(self.conn, "mcp_media_suppressed_sentence", None)
+                suppressed_id = getattr(self.conn, "mcp_media_suppressed_sentence", None)
+                if ((suppressed_id is not None and sentence_id == suppressed_id)
                         or (media_player and media_player.owns_audio)):
                     continue
                 if self.conn.client_abort:
