@@ -120,6 +120,7 @@ class MCPMediaPlayer:
             while self.active and self.index < len(self.tracks) and not self.conn.stop_event.is_set():
                 track = self.tracks[self.index]
                 await send_display_message(self.conn, f"正在播放：{track.title}")
+                await send_tts_message(self.conn, "sentence_start", track.title)
                 await self._play_track(track)
                 if self.active:
                     self.index += 1
@@ -239,6 +240,7 @@ class MCPMediaPlayer:
                 self._gate.set()
                 await send_tts_message(self.conn, "start")
                 self.conn.client_is_speaking = True
+                await send_tts_message(self.conn, "sentence_start", self.tracks[self.index].title)
                 return "已继续播放"
             if action in ("next", "previous"):
                 next_index = self.index + (1 if action == "next" else -1)
