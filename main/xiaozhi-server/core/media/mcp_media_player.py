@@ -103,8 +103,8 @@ class MCPMediaPlayer:
     async def _cancel_current(self):
         task = self._task
         self._task = None
-        if self._process and self._process.returncode is None:
-            self._process.kill()
+        # Cancellation enters _play_track's finally, which closes FFmpeg.
+        # Do not kill here too: double-kill races with subprocess teardown.
         if task and not task.done():
             task.cancel()
             try:
@@ -133,7 +133,10 @@ class MCPMediaPlayer:
             self.conn.logger.warning(f"MCP media playback stopped ({type(exc).__name__})")
         finally:
             if self._process and self._process.returncode is None:
-                self._process.kill()
+                try:
+                    self._process.kill()
+                except ProcessLookupError:
+                    pass
                 await self._process.wait()
             self._process = None
             if asyncio.current_task() is self._task and self.active and self.owns_audio:
@@ -188,7 +191,10 @@ class MCPMediaPlayer:
         finally:
             encoder.close()
             if process.returncode is None:
-                process.kill()
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
             await process.wait()
             if self._process is process:
                 self._process = None
