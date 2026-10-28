@@ -7,6 +7,7 @@ logged or placed into the LLM dialogue. Each ConnectionHandler has one player.
 
 import asyncio
 import os
+import queue
 import shutil
 from dataclasses import dataclass
 from urllib.parse import urlsplit
@@ -79,8 +80,22 @@ class MCPMediaPlayer:
             self._task = asyncio.create_task(self._run(), name="mcp-media-playback")
         return len(self.tracks)
 
+    def _clear_pending_audio(self):
+        # Do not clear report_queue: switching music must not lose tool reports.
+        tts = getattr(self.conn, "tts", None)
+        if tts:
+            for pending in (tts.tts_text_queue, tts.tts_audio_queue):
+                while True:
+                    try:
+                        pending.get_nowait()
+                    except queue.Empty:
+                        break
+        controller = getattr(self.conn, "audio_rate_controller", None)
+        if controller:
+            controller.reset()
+
     def _take_audio(self):
-        self.conn.clear_queues()
+        self._clear_pending_audio()
         self.conn.client_abort = False
         self.owns_audio = True
         self.sentence_id = self.conn.sentence_id
@@ -165,7 +180,10 @@ class MCPMediaPlayer:
                     while controller and len(controller.queue) >= 5 and self.active:
                         await self._gate.wait()
                         await asyncio.sleep(0.02)
-            if process.returncode not in (None, 0) and self.active:
+            # If FFmpeg exited because the proxy URL expired or decoding failed,
+            # report an error rather than silently advancing to the next track.
+            await process.wait()
+            if process.returncode != 0 and self.active:
                 raise RuntimeError("ffmpeg decoder failed")
         finally:
             encoder.close()
@@ -192,7 +210,7 @@ class MCPMediaPlayer:
                 self.owns_audio = False
                 self._gate.set()
                 await self._cancel_current()
-                self.conn.clear_queues()
+                self._clear_pending_audio()
                 return "已停止播放"
             if not self.active:
                 return "当前没有播放内容"
@@ -200,7 +218,7 @@ class MCPMediaPlayer:
                 self.paused = True
                 self.owns_audio = False
                 self._gate.clear()
-                self.conn.clear_queues()
+                self._clear_pending_audio()
                 return "已暂停播放"
             if action == "resume":
                 if not self.paused:
