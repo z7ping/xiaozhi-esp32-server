@@ -371,7 +371,9 @@ class TTSProviderBase(ABC):
         while not self.conn.stop_event.is_set():
             try:
                 message = self.tts_text_queue.get(timeout=1)
-                if message.sentence_id == getattr(self.conn, "mcp_media_suppressed_sentence", None):
+                media_player = getattr(self.conn, "mcp_media_player", None)
+                if (message.sentence_id == getattr(self.conn, "mcp_media_suppressed_sentence", None)
+                        or (media_player and media_player.owns_audio)):
                     continue
                 if self.conn.client_abort:
                     logger.bind(tag=TAG).info("收到打断信息，终止TTS文本处理线程")
@@ -431,7 +433,9 @@ class TTSProviderBase(ABC):
                         break
                     continue
 
-                if sentence_id == getattr(self.conn, "mcp_media_suppressed_sentence", None):
+                media_player = getattr(self.conn, "mcp_media_player", None)
+                if (sentence_id == getattr(self.conn, "mcp_media_suppressed_sentence", None)
+                        or (media_player and media_player.owns_audio)):
                     continue
                 if self.conn.client_abort:
                     logger.bind(tag=TAG).debug("收到打断信号，跳过当前音频数据")
