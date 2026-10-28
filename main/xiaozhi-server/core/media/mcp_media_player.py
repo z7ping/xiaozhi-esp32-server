@@ -37,6 +37,8 @@ def validate_audio_link(uri, mime_type, allowed_hosts):
         raise ValueError("Invalid MCP media URL")
     if parsed.hostname.lower().rstrip(".") not in allowed_hosts:
         raise ValueError("Untrusted MCP media host (set MCP_MEDIA_ALLOWED_HOSTS)")
+    if "/audio/" not in parsed.path or parsed.path.endswith("/audio/"):
+        raise ValueError("MCP media URL must target the trusted audio proxy")
     if parsed.port is not None and not 1 <= parsed.port <= 65535:
         raise ValueError("Invalid MCP media port")
     return url
