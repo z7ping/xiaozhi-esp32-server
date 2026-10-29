@@ -11,6 +11,11 @@ async def handleAbortMessage(conn: "ConnectionHandler"):
     # 设置成打断状态，会自动打断llm、tts任务
     conn.close_after_chat = False
     conn.client_abort = True
+    # Pause the active HTTP stream while the device collects the next command.
+    # The playlist and decoder position are retained for a subsequent resume.
+    media_player = getattr(conn, "mcp_media_player", None)
+    if media_player:
+        await media_player.interrupt()
     conn.clear_queues()
     # 打断客户端说话状态
     await conn.websocket.send(
