@@ -72,6 +72,18 @@ DOCKER_BUILDKIT=1 docker compose --env-file .env.cloud -f compose.cloud.yml buil
 docker compose --env-file .env.cloud -f compose.cloud.yml up -d --no-deps xiaozhi-server
 ```
 
+On **Windows PowerShell**, do not use the Bash-only `DOCKER_BUILDKIT=1 command`
+prefix. Docker Desktop uses BuildKit by default, so run:
+
+```powershell
+docker compose --env-file .env.cloud -f compose.cloud.yml build xiaozhi-server
+docker compose --env-file .env.cloud -f compose.cloud.yml up -d --no-build xiaozhi-server
+```
+
+For the initial config copy, PowerShell can use `New-Item -ItemType Directory
+-Force main/xiaozhi-server/data` and `Copy-Item`. Preserve an existing
+`data/.config.yaml` instead of overwriting its credentials.
+
 ## 3. Jellyfin MCP (after PR #2)
 
 When PR #2 has merged, configure the separate Jellyfin MCP extension at
