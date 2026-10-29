@@ -107,7 +107,7 @@ class ServerMCPClient:
                 "function": {
                     "name": name,
                     "description": tool.description,
-                    "parameters": tool.inputSchema,
+                    "parameters": tool.input_schema,
                 },
             }
             for name, tool in self.tools_dict.items()
@@ -254,8 +254,11 @@ class ServerMCPClient:
 
                 # 获取工具
                 self.tools = (await self.session.list_tools()).tools
+                allowed_tools = set(self.config.get("allowed_tools", []))
                 for t in self.tools:
                     sanitized = sanitize_tool_name(t.name)
+                    if allowed_tools and t.name not in allowed_tools and sanitized not in allowed_tools:
+                        continue
                     self.tools_dict[sanitized] = t
                     self.name_mapping[sanitized] = t.name
 

@@ -4,6 +4,7 @@
 FROM python:3.10-slim AS python-deps
 
 WORKDIR /build
+ARG PIP_INDEX_URL
 COPY main/xiaozhi-server/requirements-cloud.txt ./requirements-cloud.txt
 # BuildKit caches wheels across dependency revisions. App-code changes reuse this layer.
 RUN --mount=type=cache,target=/root/.cache/pip \
@@ -11,6 +12,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
       --prefix=/opt/python-deps -r requirements-cloud.txt
 
 FROM python:3.10-slim
+ARG APT_MIRROR_HOST
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Asia/Shanghai \
     LANG=C.UTF-8 \
@@ -19,8 +21,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
     XIAOZHI_DISABLED_PLUGINS=get_news_from_newsnow \
     XIAOZHI_PYDUB_OVERRIDE_FFMPEG=0
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt/archives,sharing=locked \
+    if [ -n "$APT_MIRROR_HOST" ]; then \
+      sed -i "s|deb.debian.org|$APT_MIRROR_HOST|g" /etc/apt/sources.list.d/debian.sources; \
+    fi && \
+    apt-get -o Acquire::Retries=5 update && \
+    apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
       ca-certificates ffmpeg libopus0 libgomp1 && \
     rm -rf /var/lib/apt/lists/*
 
@@ -29,7 +35,13 @@ WORKDIR /opt/xiaozhi-esp32-server
 COPY main/xiaozhi-server/ ./
 
 # Import smoke-check is network-free; fail the image build if dependencies drift.
-RUN mkdir -p data tmp && python -m pip check && python scripts/cloud_smoke_test.py
+# The real config is mounted at runtime, so use the checked-in cloud example only
+# for imports during the image build and remove it from the resulting layer.
+RUN mkdir -p data tmp && \
+    cp config.cloud.example.yaml data/.config.yaml && \
+    python -m pip check && \
+    python scripts/cloud_smoke_test.py && \
+    rm data/.config.yaml
 
 EXPOSE 8000 8003
 CMD ["python", "app.py"]
