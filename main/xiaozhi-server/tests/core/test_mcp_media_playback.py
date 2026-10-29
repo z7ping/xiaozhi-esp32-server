@@ -149,3 +149,56 @@ def test_media_player_pause_resume_preserves_playlist_without_just_clearing_repo
             assert not player.active
 
     _run(scenario())
+
+
+def test_sender_task_is_recreated_after_media_queue_reset():
+    """Regression: cancelled rate-controller task must not strand new music frames."""
+    class FakeController:
+        def __init__(self):
+            self.pending_send_task = object()
+            self.reset_count = 0
+
+        def reset(self):
+            self.reset_count += 1
+            # Mimic upstream AudioRateController.reset: leaves cancelled task.
+    controller = FakeController()
+    conn = SimpleNamespace(
+        tts=SimpleNamespace(tts_text_queue=queue.Queue(), tts_audio_queue=queue.Queue()),
+        audio_rate_controller=controller,
+    )
+    player = MCPMediaPlayer(conn)
+    player._clear_pending_audio()
+    assert controller.reset_count == 1
+    assert controller.pending_send_task is None
+
+
+def test_pause_and_stop_signal_device_when_music_owns_speaker():
+    from unittest.mock import AsyncMock
+
+    async def scenario():
+        conn = SimpleNamespace(
+            tts=SimpleNamespace(tts_text_queue=queue.Queue(), tts_audio_queue=queue.Queue()),
+            sentence_id="turn1",
+            client_abort=False,
+            stop_event=threading.Event(),
+            client_is_speaking=True,
+        )
+        player = MCPMediaPlayer(conn)
+        async def idle(self):
+            await asyncio.Event().wait()
+
+        with patch.object(MCPMediaPlayer, "_run", idle), patch(
+            "core.media.mcp_media_player.send_tts_message", new_callable=AsyncMock
+        ) as send_state:
+            await player.replace([MediaTrack("song", "http://mcp-host/audio/t")])
+            assert await player.control("pause") == "已暂停播放"
+            send_state.assert_any_await(conn, "stop")
+            send_state.reset_mock()
+            assert await player.control("resume") == "已继续播放"
+            send_state.assert_any_await(conn, "start")
+            send_state.reset_mock()
+            assert await player.control("stop") == "已停止播放"
+            send_state.assert_any_await(conn, "stop")
+            assert not player.active
+
+    _run(scenario())
