@@ -95,6 +95,10 @@ class MCPMediaPlayer:
         controller = getattr(self.conn, "audio_rate_controller", None)
         if controller:
             controller.reset()
+            # reset() cancels the old sender without clearing its task field.
+            # The next sendAudio() must install a *new* sender even in the
+            # same sentence; otherwise frames remain queued indefinitely.
+            controller.pending_send_task = None
 
     def _take_audio(self):
         self._clear_pending_audio()
@@ -122,6 +126,9 @@ class MCPMediaPlayer:
             await send_tts_message(self.conn, "start")
             self.conn.client_is_speaking = True
             while self.active and self.index < len(self.tracks) and not self.conn.stop_event.is_set():
+                await self._gate.wait()
+                if not self.active:
+                    break
                 track = self.tracks[self.index]
                 await send_display_message(self.conn, f"正在播放：{track.title}")
                 await send_tts_message(self.conn, "sentence_start", track.title)
@@ -222,19 +229,25 @@ class MCPMediaPlayer:
             if action == "stop":
                 if not self.active:
                     return "当前没有播放内容"
+                had_speaker = self.owns_audio
                 self.active = False
                 self.owns_audio = False
                 self._gate.set()
                 await self._cancel_current()
                 self._clear_pending_audio()
+                if had_speaker and not self.conn.client_abort:
+                    await send_tts_message(self.conn, "stop")
                 return "已停止播放"
             if not self.active:
                 return "当前没有播放内容"
             if action == "pause":
+                had_speaker = self.owns_audio
                 self.paused = True
                 self.owns_audio = False
                 self._gate.clear()
                 self._clear_pending_audio()
+                if had_speaker and not self.conn.client_abort:
+                    await send_tts_message(self.conn, "stop")
                 return "已暂停播放"
             if action == "resume":
                 if not self.paused:
