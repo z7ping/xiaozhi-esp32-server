@@ -17,6 +17,7 @@ required = (
     "core.providers.asr.openai",
     "core.providers.llm.openai.openai",
     "core.providers.tts.openai",
+    "core.providers.tts.edge",
     "core.providers.tools.server_mcp.mcp_executor",
 )
 for name in required:

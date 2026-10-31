@@ -50,7 +50,7 @@ class ASRProvider(ASRProviderBase):
         text = ""
         while True:
             try:
-                response = await asyncio.wait_for(ws.recv(), timeout=5)
+                response = await asyncio.wait_for(ws.recv(), timeout=15)
                 response_data = json.loads(response)
                 logger.bind(tag=TAG).debug(f"Received response: {response_data}")
                 if response_data.get("is_final", True):
