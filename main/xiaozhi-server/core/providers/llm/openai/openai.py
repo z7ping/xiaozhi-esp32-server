@@ -22,6 +22,7 @@ THINKING_DISABLED_DOMAINS = {
 class LLMProvider(LLMProviderBase):
     def __init__(self, config):
         self.model_name = config.get("model_name")
+        self.thinking_mode = config.get("thinking", "disabled")
         self.api_key = config.get("api_key")
         if "base_url" in config:
             self.base_url = config.get("base_url")
@@ -83,6 +84,14 @@ class LLMProvider(LLMProviderBase):
         """根据域名自动禁用思考模式"""
         parsed_url = urlparse(self.base_url)
         domain = parsed_url.netloc
+        # MiMo 默认开启思考；现有工具调用历史不会回传 reasoning_content，
+        # 根据官方要求默认关闭，保证多轮 MCP 调用。
+        if parsed_url.hostname == "api.xiaomimimo.com":
+            mode = str(getattr(self, "thinking_mode", "disabled")).lower()
+            request_params.setdefault("extra_body", {})["thinking"] = {
+                "type": "enabled" if mode == "enabled" else "disabled"
+            }
+            return
         for disabled_domain, params in THINKING_DISABLED_DOMAINS.items():
             if disabled_domain in domain:
                 request_params.setdefault("extra_body", {}).update(params)
@@ -109,6 +118,12 @@ class LLMProvider(LLMProviderBase):
         for key, value in optional_params.items():
             if value is not None:
                 request_params[key] = value
+
+        # MiMo Chat Completions 定义 max_completion_tokens 而不是 max_tokens。
+        if urlparse(self.base_url or "").hostname == "api.xiaomimimo.com":
+            max_tokens = request_params.pop("max_tokens", None)
+            if max_tokens is not None:
+                request_params["max_completion_tokens"] = max_tokens
 
         # 禁用思考模式
         self._apply_thinking_disabled(request_params)
@@ -155,6 +170,12 @@ class LLMProvider(LLMProviderBase):
         for key, value in optional_params.items():
             if value is not None:
                 request_params[key] = value
+
+        # MiMo Chat Completions 定义 max_completion_tokens 而不是 max_tokens。
+        if urlparse(self.base_url or "").hostname == "api.xiaomimimo.com":
+            max_tokens = request_params.pop("max_tokens", None)
+            if max_tokens is not None:
+                request_params["max_completion_tokens"] = max_tokens
 
         # 禁用思考模式
         self._apply_thinking_disabled(request_params)

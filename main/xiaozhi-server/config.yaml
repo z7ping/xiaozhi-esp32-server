@@ -356,6 +356,14 @@ Memory:
     llm: ChatGLMLLM
 
 ASR:
+  MiMoASR:
+    # 小米 MiMo 云端 ASR，无需本地 FunASR/SenseVoice 模型
+    type: mimo
+    api_key: 你的MiMo_API_Key
+    api_url: https://api.xiaomimimo.com/v1/chat/completions
+    model_name: mimo-v2.5-asr
+    language: auto
+    output_dir: tmp/
   FunASR:
     type: fun_local
     model_dir: models/SenseVoiceSmall
@@ -611,6 +619,14 @@ VAD:
     min_silence_duration_ms: 200  # 如果说话停顿比较长，可以把这个值设置大一些
 
 LLM:
+  MiMoLLM:
+    # 复用 OpenAI Chat Completions，默认禁用深度思考以兼容现有多轮工具调用
+    type: openai
+    api_key: 你的MiMo_API_Key
+    base_url: https://api.xiaomimimo.com/v1
+    model_name: mimo-v2.6-flash
+    thinking: disabled
+    max_tokens: 1024
   # 所有openai类型均可以修改超参，以AliLLM为例
   # 当前支持的type为openai、dify、ollama，可自行适配
   AliLLM:
@@ -1071,6 +1087,19 @@ TTS:
     output_dir: tmp/
     access_token: "你的302API密钥"
     # language: "中文"  # 指定输出语种,如:中文、英语、日语、韩语等,请根据所选音色支持的语言进行设置,不填则默认为中文
+  MiMoTTS:
+    # 小米 MiMo 云端 TTS：mimo-v2.5-tts / mimo-v2.5-tts-voicedesign / mimo-v2.5-tts-voiceclone
+    type: mimo
+    api_key: 你的MiMo_API_Key
+    api_url: https://api.xiaomimimo.com/v1/chat/completions
+    model: mimo-v2.5-tts
+    voice: 冰糖
+    # 音色设计必填；预置音色和声音克隆时可用来控制语音风格
+    voice_prompt: ""
+    # 声音克隆必填：服务端可访问的 mp3/wav 本地文件路径或 data URI
+    reference_audio: ""
+    output_dir: tmp/
+    tts_timeout: 30
   OpenAITTS:
     # openai官方文本转语音服务，可支持全球大多数语种
     type: openai
