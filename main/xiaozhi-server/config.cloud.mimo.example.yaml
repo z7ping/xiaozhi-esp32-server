@@ -1,0 +1,45 @@
+# Copy to main/xiaozhi-server/data/.config.yaml (never commit real API keys).
+# This is the local-config/cloud-only example. It merges with config.yaml.
+# To use the Java admin console, use the upstream config_from_api.yaml instead.
+server:
+  ip: 0.0.0.0
+  port: 8000
+  http_port: 8003
+  websocket: ws://YOUR_LAN_IP:8000/xiaozhi/v1/
+  vision_explain: http://YOUR_LAN_IP:8003/mcp/vision/explain
+
+selected_module:
+  VAD: SileroVAD   # Small local ONNX, NOT torch/silero_vad package.
+  ASR: MiMoASR
+  LLM: MiMoLLM
+  TTS: MiMoTTS
+  Memory: nomem
+  Intent: function_call
+
+ASR:
+  MiMoASR:
+    type: mimo
+    api_key: YOUR_MIMO_API_KEY
+    api_url: https://api.xiaomimimo.com/v1/chat/completions
+    model_name: mimo-v2.5-asr
+    language: auto
+    output_dir: tmp/
+
+LLM:
+  MiMoLLM:
+    type: openai
+    api_key: YOUR_MIMO_API_KEY
+    base_url: https://api.xiaomimimo.com/v1
+    model_name: mimo-v2.6-flash
+    thinking: disabled
+    max_tokens: 1024
+
+TTS:
+  MiMoTTS:
+    type: mimo
+    api_key: YOUR_MIMO_API_KEY
+    api_url: https://api.xiaomimimo.com/v1/chat/completions
+    model: mimo-v2.5-tts
+    voice: 冰糖
+    output_dir: tmp/
+    tts_timeout: 30
