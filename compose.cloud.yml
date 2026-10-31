@@ -1,23 +1,25 @@
 # Python cloud-only service by default. Optional management console: --profile manager
-name: xiaozhi-cloud
+name: xiaozhi-esp32-server
 
 services:
   xiaozhi-server:
-    image: xiaozhi-python-cloud:dev
-    build:
-      context: .
-      dockerfile: Dockerfile.cloud
+    image: xiaozhi-python-cloud:combined-mimo-jellyfin-edge-asr15-20261029
+    container_name: xiaozhi-python-remote-asr
     restart: unless-stopped
+    security_opt:
+      - seccomp:unconfined
     ports:
-      - "${XIAOZHI_WS_PORT:-8000}:8000"
-      - "${XIAOZHI_HTTP_PORT:-8003}:8003"
+      # ws 服务端（ESP32 连这里，勿改 IP/端口）
+      - "192.168.31.87:8010:8000"
+      # http 服务端口（视觉分析）
+      - "127.0.0.1:18003:8003"
     environment:
       TZ: Asia/Shanghai
-      # Required to play resource links: hostname in Jellyfin MCP --audio-public-url.
-      MCP_MEDIA_ALLOWED_HOSTS: "${MCP_MEDIA_ALLOWED_HOSTS:-}"
+      # 播放 jellyfin_audio 资源链接必需：hostname 必须匹配 Jellyfin MCP 的 --audio-public-url
+      MCP_MEDIA_ALLOWED_HOSTS: "${MCP_MEDIA_ALLOWED_HOSTS:-jellyfin-mcp}"
     volumes:
-      # Copy config.cloud.example.yaml to data/.config.yaml before startup.
-      - ./main/xiaozhi-server/data:/opt/xiaozhi-esp32-server/data
+      # 生产数据目录（原 docker run 挂载路径）
+      - /mnt/data/docker-apps/xiaozhi-esp32-server/data:/opt/xiaozhi-esp32-server/data
       - xiaozhi-tmp:/opt/xiaozhi-esp32-server/tmp
     healthcheck:
       test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('127.0.0.1',8000),2); s.close()"]
