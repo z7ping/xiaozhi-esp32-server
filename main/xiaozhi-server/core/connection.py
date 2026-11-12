@@ -167,6 +167,8 @@ class ConnectionHandler:
 
         # tts相关变量
         self.sentence_id = None
+        self.mcp_media_player = None  # Per-connection, lazy Jellyfin MCP player
+        self.mcp_media_suppressed_sentence = None
         # 处理TTS响应没有文本返回
         self.tts_MessageText = ""
 
@@ -1378,13 +1380,16 @@ class ConnectionHandler:
             self.dialogue.put(Message(role="assistant", content=text_buff))
 
         if depth == 0:
-            self.tts.tts_text_queue.put(
-                TTSMessageDTO(
-                    sentence_id=current_sentence_id,
-                    sentence_type=SentenceType.LAST,
-                    content_type=ContentType.ACTION,
+            # A Jellyfin tool's audio stream owns the speaker; do not stop it with TTS LAST.
+            player = self.mcp_media_player
+            if not (player and player.owns_sentence(current_sentence_id)):
+                self.tts.tts_text_queue.put(
+                    TTSMessageDTO(
+                        sentence_id=current_sentence_id,
+                        sentence_type=SentenceType.LAST,
+                        content_type=ContentType.ACTION,
+                    )
                 )
-            )
             # 使用lambda延迟计算，只有在DEBUG级别时才执行get_llm_dialogue()
             self.logger.bind(tag=TAG).debug(
                 lambda: json.dumps(
@@ -1584,6 +1589,9 @@ class ConnectionHandler:
             if hasattr(self, "aec_audio_cache"):
                 self.aec_audio_cache.clear()
                 self.aec_audio_cache_time.clear()
+
+            if self.mcp_media_player:
+                await self.mcp_media_player.close()
 
             # 清理工具处理器资源
             if hasattr(self, "func_handler") and self.func_handler:
