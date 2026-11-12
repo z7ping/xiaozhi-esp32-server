@@ -164,3 +164,32 @@ def test_hello_advertises_media_only_when_explicitly_supported(monkeypatch):
     ]:
         message, enabled = run(check(features, host, exe))
         assert not enabled and "features" not in message
+
+
+def test_touch_play_button_resumes_stopped_playlist():
+    async def idle(self):
+        await asyncio.Event().wait()
+
+    async def scenario():
+        conn = SimpleNamespace(
+            tts=None, sentence_id="a", client_abort=False,
+            mcp_media_suppressed_sentence=None,
+        )
+        player = MCPMediaPlayer(conn)
+        player.tracks = [MediaTrack("song", "http://trusted/audio/token", 50000)]
+        player.active = False
+        player.index = 1  # Natural EOF left the index past the queue.
+        conn.mcp_media_player = player
+        conn.media_control_enabled = True
+        conn.session_id = "session-a"
+        conn.websocket = Socket()
+        conn.logger = Logger()
+        with patch.object(MCPMediaPlayer, "_run", idle):
+            await MediaTextMessageHandler().handle(conn, {
+                "state": "resume", "session_id": "session-a"
+            })
+            assert player.active and player.index == 0
+            assert conn.websocket.messages[-1]["state"] == "playing"
+            await player.close()
+
+    run(scenario())

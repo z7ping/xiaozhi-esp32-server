@@ -54,7 +54,8 @@ class MediaTextMessageHandler(TextMessageHandler):
                     **_idle_state(), "page_offset": offset, "playlist": [],
                 }
             else:
-                if not player or not player.active:
+                if not player or (not player.active and
+                                  not (action == "resume" and player.tracks)):
                     raise ValueError("当前没有播放内容")
                 if action == "select":
                     index = msg_json.get("index")

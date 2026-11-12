@@ -71,6 +71,7 @@ class MCPMediaPlayer:
         self.error = ""
         self._seek_frames = 0
         self._probe_task = None
+        self._run_has_started = False
 
     def owns_sentence(self, sentence_id):
         return self.active and self.owns_audio and self.sentence_id == sentence_id
@@ -87,7 +88,7 @@ class MCPMediaPlayer:
             "title": str(title or "").encode("utf-8")[:180].decode("utf-8", "ignore"),
             "position_ms": max(0, int(self.position_ms)),
             "duration_ms": max(0, int(self.duration_ms)),
-            "current_index": self.index if self.tracks else -1,
+            "current_index": self.index if 0 <= self.index < len(self.tracks) else -1,
             "playlist_length": len(self.tracks),
         }
         if self.error:
@@ -127,7 +128,10 @@ class MCPMediaPlayer:
             return
         finally:
             if process is not None and process.returncode is None:
-                process.kill()
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
                 await process.wait()
 
     async def replace(self, tracks):
@@ -175,6 +179,7 @@ class MCPMediaPlayer:
         self.conn.mcp_media_suppressed_sentence = self.sentence_id
 
     async def _cancel_current(self):
+        self._run_has_started = False
         if self._probe_task is not None:
             self._probe_task.cancel()
             self._probe_task = None
@@ -196,6 +201,7 @@ class MCPMediaPlayer:
             if not self.active:
                 return
             await send_tts_message(self.conn, "start")
+            self._run_has_started = True
             self.conn.client_is_speaking = True
             while self.active and self.index < len(self.tracks) and not self.conn.stop_event.is_set():
                 await self._gate.wait()
@@ -371,6 +377,21 @@ class MCPMediaPlayer:
                     await send_tts_message(self.conn, "stop")
                 return "已停止播放"
             if not self.active:
+                # The firmware's play button sends resume after a deliberate stop.
+                if action == "resume" and self.tracks:
+                    if not 0 <= self.index < len(self.tracks):
+                        self.index = 0
+                    self.position_ms = 0
+                    self.duration_ms = max(0, self.tracks[self.index].duration_ms)
+                    self.error = ""
+                    self._seek_frames = 0
+                    self._run_has_started = False
+                    self.active = True
+                    self.paused = False
+                    self._gate.set()
+                    self._take_audio()
+                    self._task = asyncio.create_task(self._run(), name="mcp-media-playback")
+                    return "开始播放"
                 return "当前没有播放内容"
             if action == "pause":
                 had_speaker = self.owns_audio
@@ -387,9 +408,12 @@ class MCPMediaPlayer:
                 self.paused = False
                 self._take_audio()
                 self._gate.set()
-                await send_tts_message(self.conn, "start")
-                self.conn.client_is_speaking = True
-                await send_tts_message(self.conn, "sentence_start", self.tracks[self.index].title)
+                # When seeking a paused track the replacement _run() has not
+                # sent its initial start. Let that task send it exactly once.
+                if self._run_has_started:
+                    await send_tts_message(self.conn, "start")
+                    self.conn.client_is_speaking = True
+                    await send_tts_message(self.conn, "sentence_start", self.tracks[self.index].title)
                 return "已继续播放"
             if action in ("next", "previous"):
                 next_index = self.index + (1 if action == "next" else -1)
