@@ -16,13 +16,20 @@ THINKING_DISABLED_DOMAINS = {
     "bigmodel.cn": {"thinking": {"type": "disabled"}},
     "moonshot.cn": {"thinking": {"type": "disabled"}},
     "volces.com": {"thinking": {"type": "disabled"}},
+    "modelarts-maas.com": {"thinking": {"type": "disabled"}},
+}
+
+# 域名规则的模型名豁免表: 强制思考模型不接受该参数注入(如 MaaS glm-5.3 传 thinking 必 400)
+THINKING_DISABLED_MODEL_EXCLUSIONS = {
+    "modelarts-maas.com": ("glm-5.3",),
 }
 
 
 class LLMProvider(LLMProviderBase):
     def __init__(self, config):
         self.model_name = config.get("model_name")
-        self.thinking_mode = config.get("thinking", "disabled")
+        # 可选实例级思考强度: off/disabled/none/disable | low/medium/high | 空/其他=按域名默认
+        self.thinking_mode = str(config.get("thinking") or "").strip().lower()
         self.api_key = config.get("api_key")
         if "base_url" in config:
             self.base_url = config.get("base_url")
@@ -81,22 +88,40 @@ class LLMProvider(LLMProviderBase):
         return dialogue
 
     def _apply_thinking_disabled(self, request_params: dict):
-        """根据域名自动禁用思考模式"""
-        parsed_url = urlparse(self.base_url)
-        domain = parsed_url.netloc
-        # MiMo 默认开启思考；现有工具调用历史不会回传 reasoning_content，
-        # 根据官方要求默认关闭，保证多轮 MCP 调用。
-        if parsed_url.hostname == "api.xiaomimimo.com":
-            mode = str(getattr(self, "thinking_mode", "disabled")).lower()
+        """思考模式控制: 实例配置(thinking)优先, 否则按域名默认表"""
+        mode = getattr(self, "thinking_mode", "")
+        if mode in ("keep", "passthrough", "default"):
+            # 不干预: 既不发 thinking 参数也不查域名表(适用于强制思考/拒绝该参数的模型, 如 MaaS glm-5.3)
+            return
+        # MiMo 的工具调用需要默认禁用思考；显式 enabled 可覆盖默认值。
+        if urlparse(self.base_url or "").hostname == "api.xiaomimimo.com" and mode in ("", "enabled"):
             request_params.setdefault("extra_body", {})["thinking"] = {
                 "type": "enabled" if mode == "enabled" else "disabled"
             }
             return
+        if mode in ("off", "disabled", "none", "disable"):
+            request_params.setdefault("extra_body", {}).update({"thinking": {"type": "disabled"}})
+            logger.bind(tag=TAG).info("思考强度=off: 已禁用思考模式(实例配置)")
+            return
+        if mode in ("low", "medium", "high"):
+            request_params.setdefault("extra_body", {}).update(
+                {"reasoning_effort": mode, "thinking": {"type": "enabled"}})
+            logger.bind(tag=TAG).info(f"思考强度={mode}: reasoning_effort 已设置(实例配置)")
+            return
+        parsed_url = urlparse(self.base_url)
+        domain = parsed_url.netloc
+        model_name = (self.model_name or "").lower()
         for disabled_domain, params in THINKING_DISABLED_DOMAINS.items():
-            if disabled_domain in domain:
-                request_params.setdefault("extra_body", {}).update(params)
-                logger.bind(tag=TAG).info(f"为域名 {domain} 禁用思考模式，参数: {params}")
+            if disabled_domain not in domain:
+                continue
+            exclusions = THINKING_DISABLED_MODEL_EXCLUSIONS.get(disabled_domain, ())
+            if any(ex in model_name for ex in exclusions):
+                logger.bind(tag=TAG).info(
+                    f"域名 {domain} 命中禁思考规则, 但模型 {self.model_name} 强制思考且拒绝该参数, 跳过注入")
                 break
+            request_params.setdefault("extra_body", {}).update(params)
+            logger.bind(tag=TAG).info(f"为域名 {domain} 禁用思考模式，参数: {params}")
+            break
 
     def response(self, session_id, dialogue, **kwargs):
         dialogue = self.normalize_dialogue(dialogue)
@@ -119,7 +144,7 @@ class LLMProvider(LLMProviderBase):
             if value is not None:
                 request_params[key] = value
 
-        # MiMo Chat Completions 定义 max_completion_tokens 而不是 max_tokens。
+        # MiMo 使用 max_completion_tokens，其他 OpenAI 兼容服务保持原参数。
         if urlparse(self.base_url or "").hostname == "api.xiaomimimo.com":
             max_tokens = request_params.pop("max_tokens", None)
             if max_tokens is not None:
@@ -171,7 +196,7 @@ class LLMProvider(LLMProviderBase):
             if value is not None:
                 request_params[key] = value
 
-        # MiMo Chat Completions 定义 max_completion_tokens 而不是 max_tokens。
+        # MiMo 使用 max_completion_tokens，其他 OpenAI 兼容服务保持原参数。
         if urlparse(self.base_url or "").hostname == "api.xiaomimimo.com":
             max_tokens = request_params.pop("max_tokens", None)
             if max_tokens is not None:
