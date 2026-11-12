@@ -61,7 +61,14 @@ class ServerMCPExecutor(ToolExecutor):
                 tracks = []
                 for item in links:
                     url = validate_audio_link(item.uri, item.mimeType, allowed)
-                    tracks.append(MediaTrack(title=(item.name or "Jellyfin 音频")[:100], url=url))
+                    # Accept duration only if the MCP ResourceLink explicitly supplies it.
+                    meta = getattr(item, "meta", None)
+                    duration = meta.get("duration_ms", 0) if isinstance(meta, dict) else 0
+                    if type(duration) is not int or not 0 < duration <= 86400000:
+                        duration = 0
+                    tracks.append(MediaTrack(
+                        title=(item.name or "Jellyfin 音频")[:100], url=url, duration_ms=duration
+                    ))
                 player = getattr(conn, "mcp_media_player", None)
                 if player is None:
                     player = MCPMediaPlayer(conn)
@@ -79,10 +86,9 @@ class ServerMCPExecutor(ToolExecutor):
                 response=str(e),
             )
         except Exception as e:
-            return ActionResponse(
-                action=Action.ERROR,
-                response=str(e),
-            )
+            # ResourceLink exceptions may contain signed URLs. Do not surface them.
+            detail = "媒体服务调用失败，请重试" if actual_tool_name == "jellyfin_audio" else str(e)
+            return ActionResponse(action=Action.ERROR, response=detail)
 
     def get_tools(self) -> Dict[str, ToolDefinition]:
         """获取所有服务端MCP工具"""

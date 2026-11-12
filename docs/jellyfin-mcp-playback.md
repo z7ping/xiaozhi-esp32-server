@@ -77,7 +77,8 @@ Jellyfin's own `jellyfin_audio` MCP tool, leaving ordinary MCP calls alone.
 - This is server-side streaming; it does **not** add firmware-level wake-word
   or full-duplex acoustic echo cancellation. The device must still be able to
   capture or send the next instruction during playback.
-- Seeking and persisted playlists across device reconnections are not included.
+- Playlists are per device session, not persisted across reconnections.
+- Touch seek requires a verified duration. It decodes and skips earlier audio frames on the server (maximum 2 hours), so long tracks may seek slowly. Without a valid duration, firmware intentionally disables seeking.
 - MP3 transcoding must be available in the Jellyfin backend.
 - Expired temporary audio URLs cannot be refreshed transparently. The MCP branch
   issues links with an eight-hour lifetime.
@@ -94,3 +95,22 @@ python -m pytest tests/core/test_mcp_media_playback.py -q
 The offline tests do not call Jellyfin or open audio URLs. For hardware
 acceptance, test a single MP3, a FLAC-origin track transcoded by Jellyfin,
 a multi-song playlist, pause/resume, next/previous, and a wake-word interrupt.
+
+## ES3C28P touch control / older firmware compatibility
+
+The existing media stream remains server-owned (Jellyfin MCP -> FFmpeg -> Opus -> device).
+The server advertises `hello.features.media_control=true` only when the device requests it,
+`MCP_MEDIA_ALLOWED_HOSTS` is set, and FFmpeg is installed. Otherwise the hello contains
+no new media capability, so the firmware disables touch controls but preserves voice.
+
+A supported device sends a `media` message with one of `get_state`, `get_playlist`,
+`pause`, `resume`, `stop`, `prev`, `next`, `select`, `seek`.
+The server replies with actual playback state, track metadata, and at most 6 titles per page.
+No signed MCP audio URLs or tokens are ever sent to the device. `index` is zero-based.
+`position_ms` measures Opus frames sent, not a hardware playback acknowledgment.
+`duration_ms` is returned only when provided by verified media metadata or obtained
+through FFprobe (optional, if installed), otherwise 0 and the firmware disables Seek.
+Seek restarts decoding and discards earlier PCM frames, never asks the ESP32 to decode MP3.
+
+Manual verification remains necessary for WebSocket/MQTT, FFmpeg output, long seek, and
+voice interrupt; offline static checks do not establish real hardware compatibility.

@@ -6,6 +6,7 @@ logged or placed into the LLM dialogue. Each ConnectionHandler has one player.
 """
 
 import asyncio
+import math
 import os
 import queue
 import shutil
@@ -23,6 +24,7 @@ MAX_URL_LENGTH = 4096
 class MediaTrack:
     title: str
     url: str
+    duration_ms: int = 0  # Only verified MCP metadata or ffprobe duration
 
 
 def validate_audio_link(uri, mime_type, allowed_hosts):
@@ -64,9 +66,69 @@ class MCPMediaPlayer:
         self._gate = asyncio.Event()
         self._gate.set()
         self._lock = asyncio.Lock()
+        self.position_ms = 0  # Encoded frames sent, not a device ACK clock
+        self.duration_ms = 0
+        self.error = ""
+        self._seek_frames = 0
+        self._probe_task = None
 
     def owns_sentence(self, sentence_id):
         return self.active and self.owns_audio and self.sentence_id == sentence_id
+
+    def snapshot(self, page_offset=None):
+        """Serialize only bounded, safe metadata; never return MCP audio URLs."""
+        title = self.tracks[self.index].title if 0 <= self.index < len(self.tracks) else ""
+        state = ("error" if self.error and not self.active else
+                 "paused" if self.active and self.paused else
+                 "playing" if self.active else
+                 "stopped" if self.tracks else "idle")
+        result = {
+            "type": "media", "state": state,
+            "title": str(title or "").encode("utf-8")[:180].decode("utf-8", "ignore"),
+            "position_ms": max(0, int(self.position_ms)),
+            "duration_ms": max(0, int(self.duration_ms)),
+            "current_index": self.index if self.tracks else -1,
+            "playlist_length": len(self.tracks),
+        }
+        if self.error:
+            # All player errors are fixed messages, never FFmpeg/HTTP diagnostics.
+            result["error"] = self.error
+        if page_offset is not None:
+            offset = min(max(0, page_offset), len(self.tracks))
+            result["page_offset"] = offset
+            result["playlist"] = [
+                {"index": n, "title": str(self.tracks[n].title or "").encode("utf-8")[:180].decode("utf-8", "ignore")}
+                for n in range(offset, min(offset + 6, len(self.tracks)))
+            ]
+        return result
+
+    async def _probe_duration(self, track, index):
+        """Read a real MP3 duration without making it a required dependency."""
+        if track.duration_ms > 0 or not shutil.which("ffprobe"):
+            return
+        process = None
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "ffprobe", "-v", "error", "-rw_timeout", "5000000",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1", track.url,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            data, _ = await asyncio.wait_for(process.communicate(), timeout=8)
+            if process.returncode != 0 or len(data) > 64:
+                return
+            seconds = float(data.strip())
+            if not math.isfinite(seconds) or seconds <= 0:
+                return
+            if (self.active and self.index == index
+                    and self.tracks[index] is track):
+                self.duration_ms = int(seconds * 1000)
+        except (OSError, ValueError, asyncio.TimeoutError):
+            return
+        finally:
+            if process is not None and process.returncode is None:
+                process.kill()
+                await process.wait()
 
     async def replace(self, tracks):
         if not tracks or len(tracks) > MAX_TRACKS:
@@ -75,6 +137,10 @@ class MCPMediaPlayer:
             await self._cancel_current()
             self.tracks = list(tracks)
             self.index = 0
+            self.position_ms = 0
+            self.duration_ms = max(0, self.tracks[0].duration_ms)
+            self.error = ""
+            self._seek_frames = 0
             self.active = True
             self.paused = False
             self._gate.set()
@@ -109,6 +175,9 @@ class MCPMediaPlayer:
         self.conn.mcp_media_suppressed_sentence = self.sentence_id
 
     async def _cancel_current(self):
+        if self._probe_task is not None:
+            self._probe_task.cancel()
+            self._probe_task = None
         task = self._task
         self._task = None
         # Cancellation enters _play_track's finally, which closes FFmpeg.
@@ -123,6 +192,9 @@ class MCPMediaPlayer:
 
     async def _run(self):
         try:
+            await self._gate.wait()
+            if not self.active:
+                return
             await send_tts_message(self.conn, "start")
             self.conn.client_is_speaking = True
             while self.active and self.index < len(self.tracks) and not self.conn.stop_event.is_set():
@@ -130,11 +202,24 @@ class MCPMediaPlayer:
                 if not self.active:
                     break
                 track = self.tracks[self.index]
+                if self.duration_ms == 0:
+                    self.duration_ms = max(0, track.duration_ms)
+                if self.duration_ms == 0:
+                    self._probe_task = asyncio.create_task(
+                        self._probe_duration(track, self.index), name="mcp-media-duration"
+                    )
                 await send_display_message(self.conn, f"正在播放：{track.title}")
                 await send_tts_message(self.conn, "sentence_start", track.title)
                 await self._play_track(track)
+                if self._probe_task is not None:
+                    self._probe_task.cancel()
+                    self._probe_task = None
                 if self.active:
                     self.index += 1
+                    self.position_ms = 0
+                    self._seek_frames = 0
+                    self.duration_ms = (max(0, self.tracks[self.index].duration_ms)
+                                        if self.index < len(self.tracks) else 0)
                 controller = getattr(self.conn, "audio_rate_controller", None)
                 if controller:
                     # Only a few frames are queued at any time. Do not hang
@@ -143,6 +228,7 @@ class MCPMediaPlayer:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            self.error = "音乐播放失败，请重试"
             # Do not surface FFmpeg's URL-bearing stderr or opaque token.
             self.conn.logger.warning(f"MCP media playback stopped ({type(exc).__name__})")
             if self.owns_audio and not self.conn.client_abort:
@@ -155,6 +241,9 @@ class MCPMediaPlayer:
                     pass
                 await self._process.wait()
             self._process = None
+            if self._probe_task is not None:
+                self._probe_task.cancel()
+                self._probe_task = None
             if asyncio.current_task() is self._task and self.active:
                 was_owner = self.owns_audio
                 self.active = False
@@ -192,9 +281,13 @@ class MCPMediaPlayer:
                 await self._gate.wait()
                 if not self.active or not self.owns_audio or self.conn.client_abort:
                     continue
+                if self._seek_frames > 0:
+                    self._seek_frames -= 1
+                    continue
                 packet = encoder._encode(encoder._convert_bytes_to_shorts(pcm))
                 if packet:
                     await sendAudio(self.conn, packet)
+                    self.position_ms += 60
                     controller = getattr(self.conn, "audio_rate_controller", None)
                     # Backpressure: never buffer an entire song in RAM.
                     while controller and len(controller.queue) >= 5 and self.active:
@@ -203,6 +296,8 @@ class MCPMediaPlayer:
             # If FFmpeg exited because the proxy URL expired or decoding failed,
             # report an error rather than silently advancing to the next track.
             await process.wait()
+            if self._seek_frames > 0 and self.active:
+                raise RuntimeError("seek beyond actual decoded audio")
             if process.returncode != 0 and self.active:
                 raise RuntimeError("ffmpeg decoder failed")
         finally:
@@ -215,6 +310,43 @@ class MCPMediaPlayer:
             await process.wait()
             if self._process is process:
                 self._process = None
+
+    async def select(self, index):
+        if type(index) is not int or not 0 <= index < len(self.tracks):
+            raise ValueError("无效的歌曲索引")
+        async with self._lock:
+            await self._cancel_current()
+            self.index = index
+            self.position_ms = 0
+            self.duration_ms = max(0, self.tracks[index].duration_ms)
+            self.error = ""
+            self._seek_frames = 0
+            self.active = True
+            self.paused = False
+            self._gate.set()
+            self._take_audio()
+            self._task = asyncio.create_task(self._run(), name="mcp-media-playback")
+
+    async def seek(self, position_ms):
+        if type(position_ms) is not int or not 0 <= position_ms <= 7200000:
+            raise ValueError("跳转位置超出支持范围")
+        async with self._lock:
+            if not self.active or not 0 <= self.index < len(self.tracks):
+                raise ValueError("当前没有播放内容")
+            if self.duration_ms <= 0 or position_ms > self.duration_ms:
+                raise ValueError("当前曲目尚无可用时长或跳转位置越界")
+            paused = self.paused
+            await self._cancel_current()
+            self.position_ms = position_ms
+            self.error = ""
+            self._seek_frames = position_ms // 60
+            if paused:
+                self.owns_audio = False
+                self._gate.clear()
+            else:
+                self._gate.set()
+                self._take_audio()
+            self._task = asyncio.create_task(self._run(), name="mcp-media-playback")
 
     async def interrupt(self):
         """Device wake/barge-in: silence audio but preserve the current playlist."""
@@ -265,6 +397,10 @@ class MCPMediaPlayer:
                     return "没有更多歌曲"
                 await self._cancel_current()
                 self.index = next_index
+                self.position_ms = 0
+                self.duration_ms = max(0, self.tracks[next_index].duration_ms)
+                self.error = ""
+                self._seek_frames = 0
                 self.paused = False
                 self._gate.set()
                 self._take_audio()
@@ -279,3 +415,7 @@ class MCPMediaPlayer:
             self._gate.set()
             await self._cancel_current()
             self.tracks.clear()
+            self.position_ms = 0
+            self.duration_ms = 0
+            self._seek_frames = 0
+            self.error = ""
