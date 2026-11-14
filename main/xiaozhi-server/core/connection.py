@@ -167,6 +167,7 @@ class ConnectionHandler:
 
         # tts相关变量
         self.sentence_id = None
+        self.media_control_enabled = False
         self.mcp_media_player = None  # per-connection MCP playback, lazy initialized
         # 处理TTS响应没有文本返回
         self.tts_MessageText = ""
@@ -240,7 +241,7 @@ class ConnectionHandler:
             # 启动AEC缓存清理任务
             self._aec_cache_cleanup_task = asyncio.create_task(self._check_aec_cache_expiry())
 
-            self.welcome_msg = self.config["xiaozhi"]
+            self.welcome_msg = dict(self.config["xiaozhi"])
             self.welcome_msg["session_id"] = self.session_id
 
             # 从配置中读取采样率

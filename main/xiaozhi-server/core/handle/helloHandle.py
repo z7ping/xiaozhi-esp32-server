@@ -41,14 +41,18 @@ _wakeup_response_lock = asyncio.Lock()
 
 async def handleHelloMessage(conn: "ConnectionHandler", msg_json):
     """处理hello消息"""
+    welcome = dict(conn.welcome_msg)
     audio_params = msg_json.get("audio_params")
     if audio_params:
         format = audio_params.get("format")
         conn.logger.bind(tag=TAG).debug(f"客户端音频格式: {format}")
         conn.audio_format = format
-        conn.welcome_msg["audio_params"] = audio_params
+        welcome["audio_params"] = audio_params
     features = msg_json.get("features")
-    if features:
+    conn.media_control_enabled = (
+        isinstance(features, dict) and features.get("media_control") is True
+    )
+    if isinstance(features, dict):
         conn.logger.bind(tag=TAG).debug(f"客户端特性: {features}")
         conn.features = features
         if features.get("mcp"):
@@ -58,10 +62,19 @@ async def handleHelloMessage(conn: "ConnectionHandler", msg_json):
             conn.logger.bind(tag=TAG).debug("客户端启用了服务端AEC")
             conn.client_aec = True
 
-    await conn.websocket.send(json.dumps(conn.welcome_msg))
+    # Reserve this capability for clients that negotiated it in this session.
+    server_features = dict(welcome.get("features") or {})
+    server_features.pop("media_control", None)
+    if conn.media_control_enabled:
+        server_features["media_control"] = True
+    if server_features:
+        welcome["features"] = server_features
+    else:
+        welcome.pop("features", None)
+    await conn.websocket.send(json.dumps(welcome))
 
     # The device waits for the server hello before processing MCP messages.
-    if features and features.get("mcp"):
+    if isinstance(features, dict) and features.get("mcp"):
         asyncio.create_task(send_mcp_initialize_message(conn))
 
 
