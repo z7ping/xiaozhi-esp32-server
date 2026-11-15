@@ -10,10 +10,12 @@ import math
 import os
 import queue
 import shutil
+import time
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from core.handle.sendAudioHandle import sendAudio, send_tts_message, send_display_message
+from core.media import playback_store
 from core.utils.opus_encoder_utils import OpusEncoderUtils
 
 MAX_TRACKS = 1000
@@ -53,6 +55,16 @@ def trusted_hosts():
             os.getenv("MCP_MEDIA_ALLOWED_HOSTS", "").split(",") if v.strip()}
 
 
+def link_mime_type(item):
+    """MIME type of an MCP ResourceLink.
+
+    mcp>=2.x models expose ``mime_type`` while older payloads/tests use the
+    JSON name ``mimeType``; accept either instead of AttributeError-ing on
+    the real server's responses.
+    """
+    return getattr(item, "mime_type", None) or getattr(item, "mimeType", None)
+
+
 class MCPMediaPlayer:
     def __init__(self, conn):
         self.conn = conn
@@ -70,18 +82,41 @@ class MCPMediaPlayer:
         self._gate = asyncio.Event()
         self._gate.set()
         self._lock = asyncio.Lock()
+        # Resume-across-reconnect bookkeeping (see playback_store).
+        self.progress_source = ""
+        self._last_progress_save = 0.0
 
     def owns_sentence(self, sentence_id):
         return self.active and self.owns_audio and self.sentence_id == sentence_id
 
-    async def replace(self, tracks):
+    async def replace(self, tracks, start_index=0, start_position_ms=0):
         if not tracks or len(tracks) > MAX_TRACKS:
             raise ValueError("MCP playlist must contain 1-1000 audio tracks")
+        start_index = max(0, min(int(start_index), len(tracks) - 1))
+        start_position_ms = max(0, int(start_position_ms))
         async with self._lock:
             await self._cancel_current()
             self.tracks = list(tracks)
-            self._start_track(0)
+            self._start_track(start_index, start_position_ms)
         return len(self.tracks)
+
+    def _save_progress(self):
+        """Best-effort durable position so the next connect can resume."""
+        if not self.tracks or not 0 <= self.index < len(self.tracks):
+            return
+        device_id = playback_store.device_id_of(self.conn)
+        if not device_id:
+            return
+        track = self.tracks[self.index]
+        playback_store.save_progress(device_id, {
+            "title": track.title,
+            "index": self.index,
+            "position_ms": int(self.position_ms),
+            "duration_ms": int(self.duration_ms),
+            "source": self.progress_source,
+            "updated_at": time.time(),
+        })
+        self._last_progress_save = time.monotonic()
 
     def _set_track(self, index, position_ms=0, duration_ms=0):
         self.index = index
@@ -265,6 +300,8 @@ class MCPMediaPlayer:
                     decoded_ms += samples * 1000 // sample_rate
                     queued_frames = len(controller.queue) if controller else 0
                     self.position_ms = max(self.position_ms, decoded_ms - queued_frames * 60)
+                    if time.monotonic() - self._last_progress_save >= 10:
+                        self._save_progress()
                     if probe is not None and probe.done():
                         self.duration_ms = probe.result()
                         probe = None
@@ -315,6 +352,7 @@ class MCPMediaPlayer:
             self._gate.set()
             self._take_audio()
             self._task = asyncio.create_task(self._run(), name="mcp-media-playback")
+        self._save_progress()
 
     async def control_from_device(self, action, index, position_ms):
         async with self._lock:
@@ -343,6 +381,7 @@ class MCPMediaPlayer:
         if action == "stop":
             if not self.active:
                 return "当前没有播放内容"
+            self._save_progress()
             had_speaker = self.owns_audio
             self.active = False
             self.owns_audio = False
@@ -355,6 +394,7 @@ class MCPMediaPlayer:
         if not self.active:
             return "当前没有播放内容"
         if action == "pause":
+            self._save_progress()
             had_speaker = self.owns_audio
             self.paused = True
             self.owns_audio = False
@@ -388,6 +428,9 @@ class MCPMediaPlayer:
 
     async def close(self):
         async with self._lock:
+            # Capture the final position before the queue is dropped so the
+            # next connection resumes where this one ended.
+            self._save_progress()
             self.active = False
             self.owns_audio = False
             self._gate.set()

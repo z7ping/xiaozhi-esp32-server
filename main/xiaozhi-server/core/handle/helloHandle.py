@@ -65,8 +65,12 @@ async def handleHelloMessage(conn: "ConnectionHandler", msg_json):
     # Reserve this capability for clients that negotiated it in this session.
     server_features = dict(welcome.get("features") or {})
     server_features.pop("media_control", None)
+    server_features.pop("media_playlist_start", None)
     if conn.media_control_enabled:
         server_features["media_control"] = True
+        # 听故事/听儿歌: direct playlist start rides on the same media
+        # session as the touch player, so both flags move together.
+        server_features["media_playlist_start"] = True
     if server_features:
         welcome["features"] = server_features
     else:

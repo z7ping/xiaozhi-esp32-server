@@ -36,7 +36,8 @@ def test_touch_media_uses_negotiated_session_and_existing_player():
         conn.websocket.send.assert_not_awaited()
         await handleHelloMessage(conn, {"features": {"media_control": True}})
         assert json.loads(conn.websocket.send.await_args.args[0])["features"] == {
-            "media_control": True, "another_feature": True,
+            "media_control": True, "media_playlist_start": True,
+            "another_feature": True,
         }
         legacy = SimpleNamespace(welcome_msg=welcome, websocket=SimpleNamespace(send=AsyncMock()))
         await handleHelloMessage(legacy, {})

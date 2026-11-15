@@ -2,6 +2,7 @@ import json
 
 from core.handle.textMessageHandler import TextMessageHandler
 from core.handle.textMessageType import TextMessageType
+from core.media.device_playlist import start_device_playlist
 
 
 class MediaTextMessageHandler(TextMessageHandler):
@@ -32,6 +33,11 @@ class MediaTextMessageHandler(TextMessageHandler):
                 error = "请先语音播放"
             else:
                 error = await player.control_from_device(action, index, position)
+        elif action in ("play_story", "play_song"):
+            error = await start_device_playlist(conn, action)
+            # Starting a playlist may have created the player; report its
+            # real state instead of the pre-start snapshot below.
+            player = conn.mcp_media_player
         elif action != "get_state":
             error = "不支持的播放操作"
 

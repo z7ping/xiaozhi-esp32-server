@@ -1,7 +1,16 @@
 """服务端MCP工具执行器"""
 
+import random
 from typing import Dict, Any, Optional
-from core.media.mcp_media_player import MCPMediaPlayer, MediaTrack, trusted_hosts, validate_audio_link
+from core.media import playback_store
+from core.media.device_playlist import playlist_shuffle_enabled
+from core.media.mcp_media_player import (
+    MCPMediaPlayer,
+    MediaTrack,
+    link_mime_type,
+    trusted_hosts,
+    validate_audio_link,
+)
 from ..base import ToolType, ToolDefinition, ToolExecutor
 from plugins_func.register import Action, ActionResponse
 from .mcp_manager import ServerMCPManager
@@ -60,13 +69,24 @@ class ServerMCPExecutor(ToolExecutor):
                     return ActionResponse(action=Action.ERROR, response="歌单最多支持 1000 首歌曲")
                 tracks = []
                 for item in links:
-                    url = validate_audio_link(item.uri, item.mimeType, allowed)
+                    url = validate_audio_link(item.uri, link_mime_type(item), allowed)
                     tracks.append(MediaTrack(title=(item.name or "Jellyfin 音频")[:100], url=url))
+                # Voice loads follow the same shuffle policy as the buttons.
+                if playlist_shuffle_enabled(None):
+                    random.shuffle(tracks)
                 player = getattr(conn, "mcp_media_player", None)
                 if player is None:
                     player = MCPMediaPlayer(conn)
                     conn.mcp_media_player = player
-                count = await player.replace(tracks)
+                player.progress_source = "jellyfin:%s" % (
+                    arguments.get("playlist_id") or arguments.get("item_id") or ""
+                )
+                # Same title-matched resume as the home-screen buttons.
+                start_index, start_position_ms = playback_store.resume_point(
+                    playback_store.load_progress(playback_store.device_id_of(conn)),
+                    tracks,
+                )
+                count = await player.replace(tracks, start_index, start_position_ms)
                 # Never stringify MCP result: ResourceLinks contain bearer tokens.
                 message = f"已开始播放 {count} 首歌曲"
                 return ActionResponse(action=Action.RECORD, result=message, response=message)

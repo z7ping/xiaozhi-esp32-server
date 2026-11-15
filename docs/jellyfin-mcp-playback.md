@@ -72,12 +72,52 @@ The audio is streamed with bounded in-memory buffers, not downloaded in full.
 On disconnect, the background process is closed. The feature is restricted to
 Jellyfin's own `jellyfin_audio` MCP tool, leaving ordinary MCP calls alone.
 
+## Touch-screen playlist start (听故事 / 听儿歌)
+
+When the device hello declares `media_control`, the server hello also
+advertises `media_playlist_start` (`core/handle/helloHandle.py`). The
+ES3C28P home screen then sends `{"type":"media","state":"play_story"}` or
+`"play_song"` and expects a media state reply, exactly like the touch player
+commands.
+
+- Set `XIAOZHI_STORY_PLAYLIST_ID` and `XIAOZHI_SONG_PLAYLIST_ID` on the
+  Python XiaoZhi server. Each value is either one Jellyfin playlist id, a
+  comma-separated list of ids (played back-to-back in the configured
+  order), or the literal `auto`: the server then lists all Jellyfin
+  playlists once (`jellyfin_search` with an empty query) and keeps the
+  names matching that button's keywords (故事/童话/story or 儿歌/童谣/song),
+  so new playlists need no configuration.
+- `core/media/device_playlist.py` calls the existing `jellyfin_audio` MCP
+  tool for each selected playlist and replaces the device queue starting at
+  the saved resume point (or item 0 when there is none); the reply carries
+  the real post-start player state.
+- Every failure returns a fixed device-safe Chinese message
+  (`服务端未配置歌单`, `未找到匹配的歌单`, `读取 Jellyfin 歌单失败`, …);
+  raw exception text, MCP payloads and temporary audio URLs are never put
+  on the wire.
+
+## Playback progress (resume) and shuffle
+
+- **Resume**: the player persists the current title/index/position to
+  `data/playback_progress.json` (keyed by device id, atomic write,
+  throttled to one write per 10 s plus track change, pause, stop and
+  disconnect). The next `play_story` / `play_song` **or voice playlist
+  load** resumes at the saved position when the record is younger than
+  7 days and its track title still exists in the queue — matching by
+  title keeps resume correct across shuffles and playlist edits;
+  otherwise playback starts from the head. Single-item voice plays of the
+  same title also resume.
+- **Shuffle**: set `XIAOZHI_PLAYLIST_SHUFFLE` on the server —
+  `1`/`true`/`all` shuffles every queue (buttons and voice),
+  `story` / `song` shuffles only that home-screen button, unset or `0`
+  keeps Jellyfin's order. The device playlist page always shows the
+  actual play order, so shuffle is invisible to the firmware.
+
 ## Current limitations
 
 - This is server-side streaming; it does **not** add firmware-level wake-word
   or full-duplex acoustic echo cancellation. The device must still be able to
   capture or send the next instruction during playback.
-- Seeking and persisted playlists across device reconnections are not included.
 - MP3 transcoding must be available in the Jellyfin backend.
 - Expired temporary audio URLs cannot be refreshed transparently. The MCP branch
   issues links with an eight-hour lifetime.
@@ -89,6 +129,7 @@ Jellyfin's own `jellyfin_audio` MCP tool, leaving ordinary MCP calls alone.
 ```sh
 cd main/xiaozhi-server
 python -m pytest tests/core/test_mcp_media_playback.py -q
+python -m pytest tests/core/test_device_playlist_start.py -q
 ```
 
 The offline tests do not call Jellyfin or open audio URLs. For hardware

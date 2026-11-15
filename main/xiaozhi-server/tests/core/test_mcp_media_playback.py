@@ -58,8 +58,10 @@ def test_audio_mcp_result_starts_player_and_never_echoes_token(monkeypatch):
             self.conn = conn
             self.tracks = None
 
-        async def replace(self, tracks):
+        async def replace(self, tracks, start_index=0, start_position_ms=0):
             self.tracks = tracks
+            self.start_index = start_index
+            self.start_position_ms = start_position_ms
             return len(tracks)
 
     conn = SimpleNamespace(mcp_media_player=None)
