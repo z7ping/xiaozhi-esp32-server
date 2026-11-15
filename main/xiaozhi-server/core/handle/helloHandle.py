@@ -1,5 +1,7 @@
 import time
 import json
+import os
+import shutil
 import uuid
 import random
 import asyncio
@@ -63,6 +65,16 @@ async def handleHelloMessage(conn: "ConnectionHandler", msg_json):
         if features.get("aec"):
             conn.logger.bind(tag=TAG).debug("客户端启用了服务端AEC")
             conn.client_aec = True
+
+    # The touch firmware only sends media commands after explicit server opt-in.
+    # No FFmpeg/trusted MCP proxy means no truthful playback capability.
+    client_media = isinstance(features, dict) and features.get("media_control") is True
+    configured = bool(os.environ.get("MCP_MEDIA_ALLOWED_HOSTS", "").strip())
+    conn.media_control_enabled = bool(client_media and configured and shutil.which("ffmpeg"))
+    if conn.media_control_enabled:
+        conn.welcome_msg["features"] = {"media_control": True}
+    else:
+        conn.welcome_msg.pop("features", None)
 
     await conn.websocket.send(json.dumps(conn.welcome_msg))
 
