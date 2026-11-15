@@ -1,3 +1,6 @@
+import json
+import os
+
 import httpx
 import openai
 from openai.types import CompletionUsage
@@ -18,6 +21,18 @@ THINKING_DISABLED_DOMAINS = {
     "volces.com": {"thinking": {"type": "disabled"}},
 }
 
+
+
+
+def is_upstream_rejection(text) -> bool:
+    """Sniff MiMo-style content-filter rejections on the FIRST reply chunk.
+
+    Observation-only helper: the persona forces 普通话 replies, so an
+    English refusal sentence opening a reply is upstream filter output,
+    not model content.
+    """
+    low = (text or "").lower()
+    return low.startswith("the request was rejected") or "considered high risk" in low
 
 class LLMProvider(LLMProviderBase):
     def __init__(self, config):
@@ -80,6 +95,23 @@ class LLMProvider(LLMProviderBase):
                 msg["content"] = ""
         return dialogue
 
+
+    def _log_request(self, request_params):
+        """Opt-in capture of the outgoing LLM payload (LLM_REQUEST_LOG=1)."""
+        if os.getenv("LLM_REQUEST_LOG") != "1":
+            return
+        try:
+            payload = {
+                "base_url": self.base_url,
+                "model": request_params.get("model"),
+                "messages": request_params.get("messages"),
+                "tools": request_params.get("tools"),
+            }
+            line = "LLM_REQUEST " + json.dumps(payload, ensure_ascii=False, default=str)
+            logger.bind(tag=TAG).info(line)
+        except Exception:
+            logger.bind(tag=TAG).warning("LLM_REQUEST log failed")
+
     def _apply_thinking_disabled(self, request_params: dict):
         """根据域名自动禁用思考模式"""
         parsed_url = urlparse(self.base_url)
@@ -128,9 +160,11 @@ class LLMProvider(LLMProviderBase):
         # 禁用思考模式
         self._apply_thinking_disabled(request_params)
 
+        self._log_request(request_params)
         responses = self.client.chat.completions.create(**request_params)
 
         is_active = True
+        checked_first = False
         try:            
             for chunk in responses:
                 try:
@@ -138,6 +172,12 @@ class LLMProvider(LLMProviderBase):
                     content = getattr(delta, "content", "") if delta else ""
                 except IndexError:
                     content = ""
+                if content and not checked_first:
+                    checked_first = True
+                    if is_upstream_rejection(content):
+                        logger.bind(tag=TAG).warning(
+                            "UPSTREAM_REJECTION first-chunk detected (behavior unchanged)"
+                        )
                 if content:
                     if "<think>" in content:
                         is_active = False
@@ -180,6 +220,8 @@ class LLMProvider(LLMProviderBase):
         # 禁用思考模式
         self._apply_thinking_disabled(request_params)
 
+        checked_first = False
+        self._log_request(request_params)
         stream = self.client.chat.completions.create(**request_params)
 
         try:
