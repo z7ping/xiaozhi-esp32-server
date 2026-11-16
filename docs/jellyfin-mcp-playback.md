@@ -107,11 +107,12 @@ commands.
   title keeps resume correct across shuffles and playlist edits;
   otherwise playback starts from the head. Single-item voice plays of the
   same title also resume.
-- **Shuffle**: set `XIAOZHI_PLAYLIST_SHUFFLE` on the server —
-  `1`/`true`/`all` shuffles every queue (buttons and voice),
-  `story` / `song` shuffles only that home-screen button, unset or `0`
-  keeps Jellyfin's order. The device playlist page always shows the
-  actual play order, so shuffle is invisible to the firmware.
+- **随机播放**：点播故事或儿歌默认随机。设备可在 `play_story` 或
+  `play_song` 中传入布尔字段 `shuffle`，也可在播放中发送
+  `set_shuffle`。切换会保留当前曲目及进度，播放列表显示实际顺序。
+  设备未指定时，服务端环境变量 `XIAOZHI_PLAYLIST_SHUFFLE` 可覆盖默认值。
+  `1`、`true` 或 `all` 也对语音入口启用随机，`story` 或 `song`
+  仅对对应首页入口启用随机，`0` 使用 Jellyfin 顺序。
 
 ## Current limitations
 

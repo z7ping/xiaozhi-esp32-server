@@ -16,6 +16,7 @@ class MediaTextMessageHandler(TextMessageHandler):
         action = msg_json.get("state")
         index = msg_json.get("index")
         position = msg_json.get("position_ms")
+        shuffle = msg_json.get("shuffle")
         page = None
         error = ""
         player = conn.mcp_media_player
@@ -33,8 +34,18 @@ class MediaTextMessageHandler(TextMessageHandler):
                 error = "请先语音播放"
             else:
                 error = await player.control_from_device(action, index, position)
+        elif action == "set_shuffle":
+            if type(shuffle) is not bool:
+                error = "无效的播放模式"
+            elif player is None:
+                error = "当前歌单不支持切换顺序"
+            else:
+                error = await player.set_shuffle(shuffle)
         elif action in ("play_story", "play_song"):
-            error = await start_device_playlist(conn, action)
+            if "shuffle" in msg_json and type(shuffle) is not bool:
+                error = "无效的播放模式"
+            else:
+                error = await start_device_playlist(conn, action, shuffle)
             # Starting a playlist may have created the player; report its
             # real state instead of the pre-start snapshot below.
             player = conn.mcp_media_player

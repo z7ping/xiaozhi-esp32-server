@@ -31,10 +31,10 @@ def _conn():
     )
 
 
-async def _send(conn, action):
+async def _send(conn, action, **fields):
     processor = TextMessageProcessor(TextMessageHandlerRegistry())
     await processor.process_message(conn, json.dumps({
-        "type": "media", "session_id": "device-session", "state": action,
+        "type": "media", "session_id": "device-session", "state": action, **fields,
     }))
     return json.loads(conn.websocket.send.await_args.args[0])
 
@@ -87,11 +87,14 @@ class FakePlayer:
         self.start_index = None
         self.start_position_ms = None
         self.progress_source = ""
+        self.shuffle = None
 
-    async def replace(self, tracks, start_index=0, start_position_ms=0):
+    async def replace(self, tracks, start_index=0, start_position_ms=0, *,
+                      shuffle=None, restart_random=False, source=None):
         self.tracks = list(tracks)
         self.start_index = start_index
         self.start_position_ms = start_position_ms
+        self.shuffle = shuffle
         return len(tracks)
 
     def device_state(self, page=None):
@@ -125,6 +128,7 @@ def test_hello_advertises_media_playlist_start_only_with_touch_player():
         features = json.loads(enabled.websocket.send.await_args.args[0])["features"]
         assert features["media_control"] is True
         assert features["media_playlist_start"] is True
+        assert features["media_shuffle"] is True
 
         legacy = SimpleNamespace(
             welcome_msg={"type": "hello", "features": {}},
@@ -136,6 +140,7 @@ def test_hello_advertises_media_playlist_start_only_with_touch_player():
         features = json.loads(legacy.websocket.send.await_args.args[0]).get("features", {})
         assert "media_control" not in features
         assert "media_playlist_start" not in features
+        assert "media_shuffle" not in features
 
     _run(scenario())
 
@@ -151,7 +156,8 @@ def test_play_story_uses_single_configured_playlist(monkeypatch):
         })
         _wire(conn, manager)
 
-        reply = await _send(conn, "play_story")
+        reply = await _send(conn, "play_story", shuffle=False)
+        assert conn.mcp_media_player.shuffle is False
         assert manager.calls == [("jellyfin_audio", {"playlist_id": "story-1"})]
         assert [t.title for t in conn.mcp_media_player.tracks] == ["故事一", "故事二"]
         assert reply["state"] == "playing"
@@ -290,8 +296,8 @@ def test_shuffle_env_semantics(monkeypatch):
     from core.media.device_playlist import playlist_shuffle_enabled
 
     monkeypatch.delenv("XIAOZHI_PLAYLIST_SHUFFLE", raising=False)
-    assert not playlist_shuffle_enabled("play_story")
-    assert not playlist_shuffle_enabled("play_song")
+    assert playlist_shuffle_enabled("play_story")
+    assert playlist_shuffle_enabled("play_song")
     assert not playlist_shuffle_enabled(None)
 
     monkeypatch.setenv("XIAOZHI_PLAYLIST_SHUFFLE", "story")
@@ -309,23 +315,30 @@ def test_shuffle_env_semantics(monkeypatch):
 
 def test_shuffle_reorders_button_queue(monkeypatch):
     async def scenario():
-        from core.media import device_playlist
+        from core.media import mcp_media_player, playback_store
 
         monkeypatch.setenv("MCP_MEDIA_ALLOWED_HOSTS", "mcp-host")
         monkeypatch.setenv("XIAOZHI_STORY_PLAYLIST_ID", "story-1")
-        monkeypatch.setenv("XIAOZHI_PLAYLIST_SHUFFLE", "story")
-        monkeypatch.setattr(device_playlist, "random",
+        monkeypatch.delenv("XIAOZHI_PLAYLIST_SHUFFLE", raising=False)
+        monkeypatch.setattr(playback_store, "load_progress", lambda _: None)
+        monkeypatch.setattr(playback_store, "save_progress", lambda *args: None)
+        monkeypatch.setattr(mcp_media_player, "random",
                             SimpleNamespace(shuffle=lambda tracks: tracks.reverse()))
+        monkeypatch.setattr(mcp_media_player.MCPMediaPlayer, "_run", AsyncMock())
         conn = _conn()
         manager = FakeManager(audio_links={
             "story-1": [("http://mcp-host/audio/a", "甲"),
                         ("http://mcp-host/audio/b", "乙"),
                         ("http://mcp-host/audio/c", "丙")],
         })
-        _wire(conn, manager)
+        _wire(conn, manager, with_player=False)
 
-        await _send(conn, "play_story")
-        assert [t.title for t in conn.mcp_media_player.tracks] == ["丙", "乙", "甲"]
+        reply = await _send(conn, "play_story")
+        try:
+            assert reply["shuffle"] is True
+            assert [t.title for t in conn.mcp_media_player.tracks] == ["丙", "乙", "甲"]
+        finally:
+            await conn.mcp_media_player.close()
 
     _run(scenario())
 
