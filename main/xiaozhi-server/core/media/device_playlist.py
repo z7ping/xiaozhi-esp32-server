@@ -17,7 +17,6 @@ returned here is a fixed device-safe message.
 import asyncio
 import json
 import os
-import random
 import time
 
 from core.media import playback_store
@@ -36,12 +35,11 @@ AUTO_VALUE = "auto"
 
 
 def playlist_shuffle_enabled(action):
-    """XIAOZHI_PLAYLIST_SHUFFLE: ``1/true/all`` shuffles every load,
-    ``story``/``song`` shuffle only that home-screen button. ``action`` is
-    the device media action (``play_story``/``play_song``) or ``None`` for
-    generic voice loads, which only shuffle under ``1/true``.
-    """
-    value = (os.getenv(SHUFFLE_ENV) or "").strip().lower()
+    """未配置时默认随机播放故事和儿歌。环境变量保留旧客户端和语音入口的配置。"""
+    configured = os.getenv(SHUFFLE_ENV)
+    if configured is None:
+        return action in ("play_story", "play_song")
+    value = configured.strip().lower()
     if value in ("1", "true", "yes", "all"):
         return True
     if action == "play_story":
@@ -65,7 +63,7 @@ _LOAD_TIMEOUT_SECONDS = 20
 _UNSAFE = "读取 Jellyfin 歌单失败"
 
 
-async def start_device_playlist(conn, action: str) -> str:
+async def start_device_playlist(conn, action: str, shuffle: bool | None = None) -> str:
     """Replace the connection's queue with the configured playlist(s).
 
     Returns an empty string on success or a device-safe Chinese error
@@ -88,19 +86,22 @@ async def start_device_playlist(conn, action: str) -> str:
         )
         if not tracks:
             raise ValueError("歌单没有可播放音频")
-        if playlist_shuffle_enabled(action):
-            random.shuffle(tracks)
+        if shuffle is None:
+            shuffle = playlist_shuffle_enabled(action)
         player = getattr(conn, "mcp_media_player", None)
         if player is None:
             player = MCPMediaPlayer(conn)
             conn.mcp_media_player = player
-        player.progress_source = raw
         # Resume where this device left off (title-matched,7-day window).
+        progress = playback_store.load_progress(playback_store.device_id_of(conn))
         start_index, start_position_ms = playback_store.resume_point(
-            playback_store.load_progress(playback_store.device_id_of(conn)),
-            tracks,
+            progress, tracks,
         )
-        await player.replace(tracks, start_index, start_position_ms)
+        # A fresh random queue starts at a random track. A saved track, when
+        # found, goes first so the rest of the shuffled queue still plays.
+        resume = progress is not None and tracks[start_index].title == progress.get("title")
+        await player.replace(tracks, start_index, start_position_ms,
+                             shuffle=shuffle, restart_random=not resume, source=raw)
     except asyncio.TimeoutError:
         return _UNSAFE
     except ValueError as exc:

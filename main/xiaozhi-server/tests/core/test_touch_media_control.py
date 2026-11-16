@@ -36,7 +36,7 @@ def test_touch_media_uses_negotiated_session_and_existing_player():
         conn.websocket.send.assert_not_awaited()
         await handleHelloMessage(conn, {"features": {"media_control": True}})
         assert json.loads(conn.websocket.send.await_args.args[0])["features"] == {
-            "media_control": True, "media_playlist_start": True,
+            "media_control": True, "media_playlist_start": True, "media_shuffle": True,
             "another_feature": True,
         }
         legacy = SimpleNamespace(welcome_msg=welcome, websocket=SimpleNamespace(send=AsyncMock()))
@@ -79,6 +79,55 @@ def test_touch_media_uses_negotiated_session_and_existing_player():
                 assert (sought["state"], sought["position_ms"]) == ("paused", 1000)
                 assert (await send("resume"))["state"] == "playing"
                 assert (await send("stop"))["state"] == "stopped"
+            finally:
+                await player.close()
+
+    asyncio.run(scenario())
+
+
+def test_touch_shuffle_preserves_current_track_and_restores_playlist_order():
+    async def scenario():
+        conn = SimpleNamespace(
+            session_id="device-session",
+            media_control_enabled=True,
+            websocket=SimpleNamespace(send=AsyncMock()),
+            logger=MagicMock(),
+            sentence_id="turn",
+            stop_event=threading.Event(),
+            client_abort=False,
+        )
+        player = conn.mcp_media_player = MCPMediaPlayer(conn)
+        processor = TextMessageProcessor(TextMessageHandlerRegistry())
+
+        async def send(action, **fields):
+            await processor.process_message(conn, json.dumps({
+                "type": "media", "session_id": conn.session_id, "state": action, **fields,
+            }))
+            return json.loads(conn.websocket.send.await_args.args[0])
+
+        async def idle(_):
+            await asyncio.Event().wait()
+
+        tracks = [MediaTrack(title, "http://jellyfin-mcp/audio/private") for title in "甲乙丙丁"]
+        with patch.object(MCPMediaPlayer, "_run", idle), patch(
+            "core.media.mcp_media_player.random.shuffle", side_effect=list.reverse,
+        ):
+            await player.replace(tracks, 1, 5000, shuffle=False)
+            task = player._task
+            try:
+                assert "error" in await send("set_shuffle", shuffle=1)
+                shuffled = await send("set_shuffle", shuffle=True)
+                assert shuffled["shuffle"] is True
+                assert (shuffled["title"], shuffled["position_ms"]) == ("乙", 5000)
+                assert player._task is task
+                page = await send("get_playlist", index=0)
+                assert [item["title"] for item in page["playlist"]] == list("乙丁丙甲")
+                restored = await send("set_shuffle", shuffle=False)
+                assert restored["shuffle"] is False
+                assert restored["current_index"] == 1
+                assert player.tracks == tracks
+                assert player._task is task
+                assert (await send("next"))["title"] == "丙"
             finally:
                 await player.close()
 

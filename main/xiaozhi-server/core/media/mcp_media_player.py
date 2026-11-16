@@ -6,6 +6,7 @@ logged or placed into the LLM dialogue. Each ConnectionHandler has one player.
 """
 
 import asyncio
+import random
 import math
 import os
 import queue
@@ -69,6 +70,8 @@ class MCPMediaPlayer:
     def __init__(self, conn):
         self.conn = conn
         self.tracks = []
+        self._ordered_tracks = []
+        self.shuffle = None
         self.index = 0
         self.position_ms = 0
         self.duration_ms = 0
@@ -89,7 +92,8 @@ class MCPMediaPlayer:
     def owns_sentence(self, sentence_id):
         return self.active and self.owns_audio and self.sentence_id == sentence_id
 
-    async def replace(self, tracks, start_index=0, start_position_ms=0):
+    async def replace(self, tracks, start_index=0, start_position_ms=0, *,
+                      shuffle=None, restart_random=False, source=None):
         if not tracks or len(tracks) > MAX_TRACKS:
             raise ValueError("MCP playlist must contain 1-1000 audio tracks")
         start_index = max(0, min(int(start_index), len(tracks) - 1))
@@ -97,8 +101,41 @@ class MCPMediaPlayer:
         async with self._lock:
             await self._cancel_current()
             self.tracks = list(tracks)
+            self._ordered_tracks = self.tracks.copy() if shuffle is not None else []
+            self.shuffle = shuffle
+            if source is not None:
+                self.progress_source = source
+            if shuffle:
+                if restart_random:
+                    random.shuffle(self.tracks)
+                else:
+                    current = self.tracks.pop(start_index)
+                    random.shuffle(self.tracks)
+                    self.tracks.insert(0, current)
+                start_index = 0
             self._start_track(start_index, start_position_ms)
         return len(self.tracks)
+
+    async def set_shuffle(self, enabled):
+        async with self._lock:
+            if self.shuffle is None or not self.tracks:
+                return "当前歌单不支持切换顺序"
+            if self.shuffle == enabled:
+                return ""
+            current = self.tracks[self.index] if self.index < len(self.tracks) else None
+            queue = self._ordered_tracks.copy()
+            if enabled:
+                if current is not None:
+                    queue = [track for track in queue if track is not current]
+                random.shuffle(queue)
+                if current is not None:
+                    queue.insert(0, current)
+            self.tracks = queue
+            self.index = next(
+                (index for index, track in enumerate(queue) if track is current), len(queue)
+            )
+            self.shuffle = enabled
+            return ""
 
     def _save_progress(self):
         """Best-effort durable position so the next connect can resume."""
@@ -143,6 +180,8 @@ class MCPMediaPlayer:
         }
         if self.error:
             result["error"] = self.error
+        if self.shuffle is not None:
+            result["shuffle"] = self.shuffle
         if page is not None:
             last_page = max(0, len(self.tracks) - 1) // PAGE_SIZE * PAGE_SIZE
             page = min(page, last_page)
@@ -436,3 +475,5 @@ class MCPMediaPlayer:
             self._gate.set()
             await self._cancel_current()
             self.tracks.clear()
+            self._ordered_tracks.clear()
+            self.shuffle = None
